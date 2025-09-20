@@ -1,0 +1,6 @@
+openfhe-development/
+.vscode
+build/
+*.bin
+*.o
+assignment.md
