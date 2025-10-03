@@ -17,7 +17,7 @@ else()
     message(FATAL_ERROR "OpenFHE not found. Install OpenFHE to /usr/local/")
 endif()
 
-add_executable(biometric_verify biometric_verify.cpp)
+add_executable(biometric_verify src/main.cpp src/ThresholdBiometricSystem.cpp)
 
 target_include_directories(biometric_verify SYSTEM PRIVATE
     ${OpenFHE_INCLUDE}
@@ -26,8 +26,8 @@ target_include_directories(biometric_verify SYSTEM PRIVATE
     ${OpenFHE_INCLUDE}/binfhe
 )
 
-target_link_directories(biometric_verify PRIVATE
-    /usr/local/lib
+target_include_directories(biometric_verify PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
 )
 
 target_link_libraries(biometric_verify PRIVATE
@@ -37,22 +37,22 @@ target_link_libraries(biometric_verify PRIVATE
 add_custom_target(run
     COMMAND ${CMAKE_COMMAND} -E env
         LD_LIBRARY_PATH=/usr/local/lib:$<TARGET_FILE_DIR:biometric_verify>
-        $<TARGET_FILE:biometric_verify>
+        $<TARGET_FILE:biometric_verify> --mult-depth 40 --num-vectors 50 --batch-size 512
     DEPENDS biometric_verify
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    COMMENT "Running biometric verification with LD_LIBRARY_PATH set"
+    COMMENT "Running biometric verification with default parameters"
 )
 
 add_custom_target(install-openfhe
     COMMAND git clone --depth=1 https://github.com/openfheorg/openfhe-development.git openfhe-src
-    COMMAND ${CMAKE_COMMAND} -S openfhe-src -B openfhe-build -D BUILD_EXAMPLES=OFF -D BUILD_BENCHMARKS=OFF
-    COMMAND ${CMAKE_COMMAND}  --build openfhe-build --target install -j${HALF_NPROC}
+    COMMAND ${CMAKE_COMMAND} -S openfhe-src -B openfhe-build -D BUILD_EXAMPLES=OFF -D BUILD_BENCHMARKS=OFF -D BUILD_TESTING=OFF
+    COMMAND ${CMAKE_COMMAND} --build openfhe-build --target install -j$(HALF_NPROC)
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Installing OpenFHE"
 )
 
 add_custom_target(uninstall-openfhe
-    COMMAND ${CMAKE_COMMAND} -E env sh -c "if [ -f openfhe-build/install_manifest.txt ]; then xargs rm -f < openfhe-build/install_manifest.txt; fi"
+    COMMAND ${CMAKE_COMMAND} --build openfhe-build --target uninstall
     COMMAND ${CMAKE_COMMAND} -E rm -rf openfhe-src openfhe-build
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Uninstalling OpenFHE"

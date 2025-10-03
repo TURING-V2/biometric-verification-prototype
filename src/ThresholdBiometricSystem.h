@@ -47,11 +47,6 @@ private:
     lbcrypto::Ciphertext<lbcrypto::DCRTPoly> computeBatchApproximation(
         std::vector<lbcrypto::Ciphertext<lbcrypto::DCRTPoly>>& sims);
 
-    // low-depth approximation functions for max
-    lbcrypto::Ciphertext<lbcrypto::DCRTPoly> weightedAverage(
-        const lbcrypto::Ciphertext<lbcrypto::DCRTPoly>& a,
-        const lbcrypto::Ciphertext<lbcrypto::DCRTPoly>& b);
-    
     lbcrypto::Ciphertext<lbcrypto::DCRTPoly> pureAverage(
         const lbcrypto::Ciphertext<lbcrypto::DCRTPoly>& a,
         const lbcrypto::Ciphertext<lbcrypto::DCRTPoly>& b);
@@ -60,6 +55,9 @@ private:
     bool computeThresholdDecision(const lbcrypto::Ciphertext<lbcrypto::DCRTPoly>& encryptedResult);
 
     double computePlaintextMaxSimilarity(const std::vector<double>& q, const std::vector<std::vector<double>>& db);
+    
+    lbcrypto::Ciphertext<lbcrypto::DCRTPoly> homomorphicSign(const lbcrypto::Ciphertext<lbcrypto::DCRTPoly>& x);
+    lbcrypto::Ciphertext<lbcrypto::DCRTPoly> polyMax(const lbcrypto::Ciphertext<lbcrypto::DCRTPoly>& a, const lbcrypto::Ciphertext<lbcrypto::DCRTPoly>& b);
 
     AppConfig m_config;
     lbcrypto::CryptoContext<lbcrypto::DCRTPoly> m_cryptoContext;

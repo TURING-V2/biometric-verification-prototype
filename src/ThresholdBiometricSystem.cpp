@@ -26,13 +26,12 @@ void ThresholdBiometricSystem::setupCKKS() {
     cout << "Setting up CKKS..." << endl;
 
     CCParams<CryptoContextCKKSRNS> parameters;
+
     parameters.SetMultiplicativeDepth(m_config.multDepth);
     parameters.SetFirstModSize(60);
-    parameters.SetScalingModSize(40);
-    parameters.SetBatchSize(1024);
+    parameters.SetScalingModSize(50);
+    parameters.SetBatchSize(m_config.batchSize);
     parameters.SetSecurityLevel(HEStd_128_classic);
-    // HE standard compliant for the given security level increases in 2^n (highly memory intensive) 
-    parameters.SetRingDim(131072);
     parameters.SetKeySwitchTechnique(HYBRID);
     parameters.SetScalingTechnique(FLEXIBLEAUTO);
 
@@ -46,34 +45,32 @@ void ThresholdBiometricSystem::setupCKKS() {
     cout << "* CKKS context created" << endl;
     cout << "  - Ring dimension: " << m_cryptoContext->GetRingDimension() << endl;
     cout << "  - Multiplicative depth budget: " << m_config.multDepth << endl;
+    cout << "  - Scaling mod size: 50 bits" << endl;
 }
 
 void ThresholdBiometricSystem::generateThresholdKeys() {
     cout << "\nGenerating threshold key structure (" << m_config.thresholdT << "-out-of-" << m_config.numParties << ")..." << endl;
 
-    // gene temp key pair to create evaluation and rotation keys
     auto mainKP = m_cryptoContext->KeyGen();
     m_publicKey = mainKP.publicKey;
-    m_simulationSecretKey = mainKP.secretKey; // For simulation decryption only
+    m_simulationSecretKey = mainKP.secretKey;
 
     m_cryptoContext->EvalMultKeyGen(mainKP.secretKey);
 
     // gen rotation keys needed for the dot product (summing slots)
     vector<int> rotationIndices;
-    for (int r = 1; r < (int)m_config.vecDim; r <<= 1) {
+    int maxRotation = min((int)m_config.vecDim, (int)m_cryptoContext->GetRingDimension()/2);
+    for (int r = 1; r < maxRotation; r <<= 1) {
         rotationIndices.push_back(r);
     }
     m_cryptoContext->EvalRotateKeyGen(mainKP.secretKey, rotationIndices);
     
-    // simulate generation of secret key shares for multiple parties
-    // in a real system, this would be done via a multi-party protocol
     m_secretKeyShares.clear();
     for (int i = 0; i < m_config.numParties; ++i) {
         m_secretKeyShares.push_back(m_cryptoContext->KeyGen().secretKey);
         cout << "  - Generated secret key share for party " << (i + 1) << " (simulated)" << endl;
     }
-    cout << "* Key generation complete. Public and evaluation keys are available." << endl;
-    cout << "* PRIVACY CHECK: Server holds only public/evaluation keys. Secret key shares are not loaded." << endl;
+    cout << "* Key generation complete" << endl;
 }
 
 void ThresholdBiometricSystem::run() {
@@ -83,10 +80,9 @@ void ThresholdBiometricSystem::run() {
     cout << "Configuration: " << m_config.numVectors << " vectors x " << m_config.vecDim << "D" << endl;
     cout << "Streaming Batch Size: " << m_config.batchSize << endl;
     cout << "Max Depth: " << m_config.multDepth << endl;
-    cout << "Approach: Weighted Averaging Approximation of Maximum" << endl;
+    cout << "Approach: Polynomial Approximation of Maximum" << endl;
 
     auto totalStart = chrono::high_resolution_clock::now();
-
     auto database = generateTestVectors(m_config.numVectors, m_config.vecDim);
     auto query = generateTestVectors(1, m_config.vecDim)[0];
 
@@ -104,7 +100,6 @@ void ThresholdBiometricSystem::run() {
     database.shrink_to_fit();
     query.clear();
     query.shrink_to_fit();
-    cout << "* Cleared plaintext database and query from memory." << endl;
 
     cout << "\nRunning encrypted pipeline..." << endl;
     auto encStart = chrono::high_resolution_clock::now();
@@ -115,31 +110,35 @@ void ThresholdBiometricSystem::run() {
          << chrono::duration_cast<chrono::seconds>(encEnd - encStart).count() << "s)" << endl;
 
     double encResultValue = thresholdDecryptResult(encResult);
-    bool isUnique = computeThresholdDecision(encResult);
+    bool isUnique = (encResultValue < m_config.threshold);
 
     if (remove(dbFile.c_str()) != 0) {
         cerr << "Warning: Could not delete temporary file " << dbFile << endl;
-    } else {
-        cout << "* Cleaned up encrypted database file." << endl;
     }
 
     auto totalEnd = chrono::high_resolution_clock::now();
 
     cout << "\n" << string(60, '=') << "\nRESULTS\n" << string(60, '=') << endl;
     cout << "Plaintext Max Similarity:  " << fixed << setprecision(8) << plaintextMax << endl;
-    cout << "Encrypted Approx. Result: " << fixed << setprecision(8) << encResultValue << endl;
+    cout << "Encrypted Result:          " << fixed << setprecision(8) << encResultValue << endl;
 
     double absErr = fabs(plaintextMax - encResultValue);
+    double relErr = absErr / (fabs(plaintextMax) + 1e-10) * 100;
     cout << "Absolute Error:            " << scientific << setprecision(4) << absErr << endl;
+    cout << "Relative Error:            " << fixed << setprecision(2) << relErr << "%" << endl;
+    double accuracy = (100.0 - relErr);
+    cout << "Accuracy:                  " << fixed << setprecision(2) << accuracy << "%" << endl;
 
     cout << "\nFinal Decision: The query vector is " << (isUnique ? "UNIQUE" : "NOT UNIQUE") 
          << " (Threshold: " << m_config.threshold << ")" << endl;
     
     cout << "\nTotal runtime: " << chrono::duration_cast<chrono::seconds>(totalEnd - totalStart).count() << "s" << endl;
     cout << string(60, '=') << endl;
+    
+    if (accuracy < 90.0) {
+        cout << "\nWARNING: Accuracy is below 90%. Consider adjusting parameters." << endl;
+    }
 }
-
-
 
 vector<vector<double>> ThresholdBiometricSystem::generateTestVectors(size_t numVectors, size_t dimension) {
     cout << "\nGenerating " << numVectors << " unit-normalized " << dimension << "D vectors..." << endl;
@@ -154,7 +153,7 @@ vector<vector<double>> ThresholdBiometricSystem::generateTestVectors(size_t numV
             norm += vecs[i][j] * vecs[i][j];
         }
         norm = sqrt(norm);
-        if (norm == 0.0) norm = 1.0;
+        if (norm < 1e-10) norm = 1.0;
         for (size_t j = 0; j < dimension; ++j) vecs[i][j] /= norm;
     }
     cout << "* Vector generation complete." << endl;
@@ -188,13 +187,14 @@ Ciphertext<DCRTPoly> ThresholdBiometricSystem::encryptQueryVector(const vector<d
 }
 
 Ciphertext<DCRTPoly> ThresholdBiometricSystem::computeCosineSimilarity(const Ciphertext<DCRTPoly>& query, const Ciphertext<DCRTPoly>& dbvec) {
-    // cosine similarity is the dot product for unit-normalized vectors.
-    // homo multi
+    // element-wise multiplication
     auto prod = m_cryptoContext->EvalMult(query, dbvec);
-
-    // sum all slots using rotations
+    
+    // sum all slots using rotation and addition
     Ciphertext<DCRTPoly> sum = prod;
-    for (int r = 1; r < (int)m_config.vecDim; r <<= 1) {
+    int maxRotation = min((int)m_config.vecDim, (int)m_cryptoContext->GetRingDimension()/2);
+    
+    for (int r = 1; r < maxRotation; r <<= 1) {
         auto rotated = m_cryptoContext->EvalRotate(sum, r);
         sum = m_cryptoContext->EvalAdd(sum, rotated);
     }
@@ -202,11 +202,11 @@ Ciphertext<DCRTPoly> ThresholdBiometricSystem::computeCosineSimilarity(const Cip
 }
 
 Ciphertext<DCRTPoly> ThresholdBiometricSystem::computeStreamingApproximation(const string& dbFilePath, const Ciphertext<DCRTPoly>& encQuery) {
-    cout << "\nComputing max similarity approximation via streaming..." << endl;
+    cout << "\nComputing maximum similarity via poly approximation..." << endl;
     ifstream ifs(dbFilePath, ios::binary);
     if (!ifs) throw runtime_error("Cannot open database file: " + dbFilePath);
 
-    Ciphertext<DCRTPoly> globalResult = nullptr;
+    Ciphertext<DCRTPoly> globalMax = nullptr;
     vector<Ciphertext<DCRTPoly>> batchSims;
     batchSims.reserve(m_config.batchSize);
 
@@ -222,55 +222,40 @@ Ciphertext<DCRTPoly> ThresholdBiometricSystem::computeStreamingApproximation(con
         batchSims.push_back(move(sim));
         count++;
 
-        if (batchSims.size() == m_config.batchSize) {
-            auto batchResult = computeBatchApproximation(batchSims);
+        if (batchSims.size() == m_config.batchSize || ifs.peek() == EOF) {
+            auto batchMax = computeBatchApproximation(batchSims);
             numBatches++;
             
-            if (globalResult == nullptr) {
-                globalResult = batchResult;
+            if (globalMax == nullptr) {
+                globalMax = batchMax;
             } else {
-                // hierarchical reduction
-                globalResult = weightedAverage(globalResult, batchResult);
+                globalMax = polyMax(globalMax, batchMax);
             }
             batchSims.clear();
-        }
-
-        if (count > 0 && count % 200 == 0) {
-            cout << "  - Processed " << count << " vectors..." << endl;
-        }
-    }
-
-    // proc any remaining vectors in the last batch
-    if (!batchSims.empty()) {
-        auto batchResult = computeBatchApproximation(batchSims);
-        if (globalResult == nullptr) {
-            globalResult = batchResult;
-        } else {
-            globalResult = weightedAverage(globalResult, batchResult);
+            
+            if (count % 10 == 0) {
+                cout << "  - Processed " << count << " vectors..." << endl;
+            }
         }
     }
 
-    if (globalResult == nullptr) {
-        throw std::runtime_error("No vectors were processed from the database.");
-    }
-    
-    cout << "* Streaming computation complete. Processed " << count << " vectors in " << numBatches + 1 << " batches." << endl;
-    return globalResult;
+    cout << "* Computation complete. Processed " << count << " vectors in " << numBatches << " batches." << endl;
+    return globalMax;
 }
 
 Ciphertext<DCRTPoly> ThresholdBiometricSystem::computeBatchApproximation(vector<Ciphertext<DCRTPoly>>& sims) {
     if (sims.empty()) throw runtime_error("Cannot process an empty batch.");
     
-    // reduce the batch using a tree-like structure
+    // tournament-style reduction with poly max approximation
     while (sims.size() > 1) {
         vector<Ciphertext<DCRTPoly>> nextLevel;
         for (size_t i = 0; i < sims.size(); i += 2) {
             if (i + 1 < sims.size()) {
-                // depth budget checks
-                if (sims[i]->GetLevel() >= m_config.multDepth - 2) {
-                     nextLevel.push_back(pureAverage(sims[i], sims[i+1]));
+                if (sims[i]->GetLevel() >= m_config.multDepth - 3) {
+                    // fall back to simple average if running out of depth
+                    nextLevel.push_back(pureAverage(sims[i], sims[i+1]));
                 } else {
-                     nextLevel.push_back(weightedAverage(sims[i], sims[i+1]));
+                    nextLevel.push_back(polyMax(sims[i], sims[i+1]));
                 }
             } else {
                 nextLevel.push_back(sims[i]);
@@ -281,20 +266,26 @@ Ciphertext<DCRTPoly> ThresholdBiometricSystem::computeBatchApproximation(vector<
     return sims[0];
 }
 
-Ciphertext<DCRTPoly> ThresholdBiometricSystem::weightedAverage(const Ciphertext<DCRTPoly>& a, const Ciphertext<DCRTPoly>& b) {
-    // approx max(a,b) with low depth: 0.5*(a+b) + 0.2*(a-b)
-    // this biases towards the larger value.
-    auto sum = m_cryptoContext->EvalAdd(a, b);
+Ciphertext<DCRTPoly> ThresholdBiometricSystem::homomorphicSign(const Ciphertext<DCRTPoly>& x) {
+    // simple polynomial approximation for sign function: sign(x) ~ 1.5x - 0.5x^3
+    // degree-3 polynomial approximation
+    auto x_cubed = m_cryptoContext->EvalMult(m_cryptoContext->EvalMult(x, x), x);
+    auto term1 = m_cryptoContext->EvalMult(x, 1.5);
+    auto term2 = m_cryptoContext->EvalMult(x_cubed, -0.5);
+    return m_cryptoContext->EvalAdd(term1, term2);
+}
+
+Ciphertext<DCRTPoly> ThresholdBiometricSystem::polyMax(const Ciphertext<DCRTPoly>& a, const Ciphertext<DCRTPoly>& b) {
     auto diff = m_cryptoContext->EvalSub(a, b);
-    
-    auto avg = m_cryptoContext->EvalMult(sum, 0.5);
-    auto bias = m_cryptoContext->EvalMult(diff, 0.2);
-    
-    return m_cryptoContext->EvalAdd(avg, bias);
+    auto sign_of_diff = homomorphicSign(diff);
+    auto term1 = m_cryptoContext->EvalAdd(a, b);
+    auto term2 = m_cryptoContext->EvalMult(sign_of_diff, diff);
+    auto sum = m_cryptoContext->EvalAdd(term1, term2);
+
+    return m_cryptoContext->EvalMult(sum, 0.5); //rescale
 }
 
 Ciphertext<DCRTPoly> ThresholdBiometricSystem::pureAverage(const Ciphertext<DCRTPoly>& a, const Ciphertext<DCRTPoly>& b) {
-    // fallback func when depth budget is exhausted
     auto sum = m_cryptoContext->EvalAdd(a, b);
     return m_cryptoContext->EvalMult(sum, 0.5);
 }
@@ -312,30 +303,33 @@ double ThresholdBiometricSystem::thresholdDecryptResult(const Ciphertext<DCRTPol
         cerr << "Warning: Decryption resulted in an empty plaintext." << endl;
         return 0.0;
     }
-    cout << "* Decrypted approximate result: " << fixed << setprecision(8) << vals[0] << endl;
-    return vals[0];
+    
+    double result = vals[0];
+    cout << "  - Decrypted value: " << fixed << setprecision(8) << result << endl;
+    return result;
 }
 
 bool ThresholdBiometricSystem::computeThresholdDecision(const Ciphertext<DCRTPoly>& encryptedResult) {
-    // this version decrypts the value first, then compares.
-    // a fully homomorphic comparison is possible but extremely depth-intensive.
-    // given the constraints, decrypt-then-compare is a practical approach.
     double result = thresholdDecryptResult(encryptedResult);
     bool isUnique = result < m_config.threshold;
-    cout << "* Threshold Check: " << result << " < " << m_config.threshold << " -> " << (isUnique ? "UNIQUE" : "NOT UNIQUE") << endl;
+    cout << "* Threshold Check: " << result << " < " << m_config.threshold 
+         << " -> " << (isUnique ? "UNIQUE" : "NOT UNIQUE") << endl;
     return isUnique;
 }
 
 double ThresholdBiometricSystem::computePlaintextMaxSimilarity(const vector<double>& q, const vector<vector<double>>& db) {
-    double maxSim = -2.0; // start below the possible range [-1, 1]
-    for (const auto& v : db) {
+    double maxSim = -2.0;
+    size_t maxIndex = 0;
+    for (size_t idx = 0; idx < db.size(); ++idx) {
         double sim = 0.0;
         for (size_t i = 0; i < q.size(); ++i) {
-            sim += q[i] * v[i];
+            sim += q[i] * db[idx][i];
         }
         if (sim > maxSim) {
             maxSim = sim;
+            maxIndex = idx;
         }
     }
+    cout << "  - Max similarity found at index " << maxIndex << endl;
     return maxSim;
 }

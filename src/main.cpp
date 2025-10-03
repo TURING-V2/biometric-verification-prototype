@@ -9,12 +9,12 @@ int main(int argc, char** argv) {
 
     program.add_argument("--mult-depth")
         .help("Multiplicative depth for CKKS")
-        .default_value(40u)
+        .default_value(30u)
         .scan<'u', uint32_t>();
 
     program.add_argument("--num-vectors")
         .help("Number of vectors in the database")
-        .default_value(1000ul)
+        .default_value(50ul)
         .scan<'u', size_t>();
 
     program.add_argument("--vec-dim")
@@ -23,8 +23,8 @@ int main(int argc, char** argv) {
         .scan<'u', size_t>();
     
     program.add_argument("--batch-size")
-        .help("Number of vectors to process in a streaming batch")
-        .default_value(20ul)
+        .help("Number of vectors to process in a streaming batch (^2 and > vector size)")
+        .default_value(512ul)
         .scan<'u', size_t>();
 
     try {
