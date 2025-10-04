@@ -134,7 +134,7 @@ Scaling to 1 million vectors requires addressing I/O, memory, and computational 
 The system includes a Dockerfile for consistent deployment across environments:
 
 -   **Base Image**: Ubuntu 22.04 for OpenFHE compatibility
--   **OpenFHE Version**: 1.1.4 (stable release)
+-   **OpenFHE Version**: master branch
 -   **Build Configuration**: Release mode with OpenMP support
 -   **Resource Requirements**: 
     - Minimum 16GB RAM
