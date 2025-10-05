@@ -5,11 +5,6 @@
 #include <string>
 #include <vector>
 
-namespace lbcrypto {
-    template <typename Element>
-    class CryptoContextImpl;
-}
-
 struct AppConfig {
     uint32_t multDepth;
     size_t numVectors;
